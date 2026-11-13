@@ -1,0 +1,601 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#050910">
+<title>ASCII Noel</title>
+<style>
+  :root{--bg:#050910;--ink:#e8dcc0;--line:#2a3547;--dim:#b4a688}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--dim);font:13px/1.4 -apple-system,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif;overflow:hidden;overscroll-behavior:none;touch-action:manipulation;-webkit-text-size-adjust:100%}
+  body{height:100vh;height:100dvh;display:flex;flex-direction:column}
+  #wrap{position:relative;flex:1 1 auto;min-height:0;display:flex;align-items:center;justify-content:center;padding-top:env(safe-area-inset-top)}
+  canvas{max-width:100%;max-height:100%;width:auto;height:auto;aspect-ratio:900/980;background:var(--bg);display:block}
+  #tap{position:absolute;left:50%;bottom:10px;transform:translateX(-50%);padding:6px 14px;border-radius:999px;background:rgba(11,18,29,.85);border:1px solid var(--line);color:var(--ink);white-space:nowrap;pointer-events:none;animation:pulse 1.6s ease-in-out infinite}
+  #tap.gone{display:none}
+  @keyframes pulse{50%{opacity:.45}}
+  #bar{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:#080d16;border-top:1px solid #1b2433}
+  #bar input[type=text],#bar button,#bar select,#bar label.btn{min-height:40px;background:#0b121d;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font:inherit;font-size:14px}
+  #bar input[type=text]{flex:1 1 100%;max-width:420px;font-size:16px} /* 16px: iOS 입력 시 자동 확대 방지 */
+  #bar button,#bar label.btn,#bar select{cursor:pointer;white-space:nowrap}
+  #bar button:hover,#bar label.btn:hover{border-color:var(--dim)}
+  #bar input[type=file]{display:none}
+  #hint{opacity:.6;white-space:nowrap}
+  @media (max-width:720px){#hint,#bar label.btn{display:none}#bar select{flex:1 1 100%;max-width:420px;text-overflow:ellipsis}#bar button{flex:1 1 0}}
+  @media (min-width:721px){#bar{flex-wrap:nowrap}#bar input[type=text]{flex:0 1 260px}}
+</style>
+</head>
+<body>
+<div id="wrap"><canvas id="c" width="900" height="980"></canvas><div id="tap">🔔 화면을 터치하면 음악이 시작돼요</div></div>
+<div id="bar">
+  <input id="msg" type="text" placeholder="가운데 문구 입력 후 Enter" maxlength="80" enterkeyhint="done" autocomplete="off">
+  <button id="pause">일시정지</button>
+  <button id="restart">처음부터</button>
+  <button id="mute">🔊 음악</button>
+  <select id="src" title="배경음악">
+    <option value="jingle">🎹 16비트 징글벨 (기본·광고 없음)</option>
+    <option value="yt">🎤 머라이어 캐리 (YouTube·광고 가능)</option>
+    <option value="local">📁 내 MP3</option>
+  </select>
+  <label class="btn">MP3 선택<input id="file" type="file" accept="audio/*"></label>
+  <span id="hint">Space: 일시정지 · R: 다시 · 화면을 클릭하면 음악 시작</span>
+</div>
+<audio id="music" loop preload="auto"></audio>
+<div style="position:fixed;left:-400px;top:0;width:200px;height:200px;overflow:hidden"><div id="yt"></div></div>
+
+<script>
+"use strict";
+/* ASCII Noel — 단일 HTML 버전 (Python/설치 불필요). christmas_art.py 의 포팅. */
+const W=900,H=980,TAU=Math.PI*2;
+const BG='rgb(5,9,16)';
+const FONT_MONO='Menlo,Consolas,"DejaVu Sans Mono","Courier New",monospace';
+const FONT_MSG='"Malgun Gothic","Apple SD Gothic Neo","Noto Sans CJK KR","Noto Sans KR","Nanum Gothic",sans-serif';
+const DEFAULT_MESSAGE='MERRY CHRISTMAS';
+const GROW=10, PERIOD=30, MESSAGE_SECONDS=5;
+
+/* ---------- 시드 난수 ---------- */
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+
+/* ---------- 트리 지오메트리 ---------- */
+const CH='vx/\\+*@=#%';
+function build(){
+  const rng=mulberry32(1225);
+  const uni=(a,b)=>a+(b-a)*rng();
+  const X=[],Y=[],Z=[],C=[],M=[],NX=[],NY=[],NZ=[];
+  const add=(x,y,z,ch,mat,n)=>{X.push(x);Y.push(y);Z.push(z);C.push(CH.indexOf(ch));M.push(mat);NX.push(n[0]);NY.push(n[1]);NZ.push(n[2])};
+  const needle='vx/\\+*';
+  for(let layer=0;layer<24;layer++){
+    const y=.055+layer*.039, radius=(1-y)*.91, branches=Math.max(7,Math.floor(24*(1-y)));
+    for(let b=0;b<branches;b++){
+      const a=b*TAU/branches+layer*2.399;
+      for(let j=0;j<100;j++){
+        const u=Math.sqrt(rng());
+        const aa=a+uni(-.15,.15)*(1-u*.6);
+        const rr=radius*u;
+        const yy=y+.045*Math.sin(u*Math.PI)-.035*u*u+uni(-.016,.016);
+        add(rr*Math.cos(aa),yy,rr*Math.sin(aa),needle[Math.floor(rng()*6)],0,[Math.cos(aa),.35,Math.sin(aa)]);
+      }
+    }
+  }
+  for(let i=0;i<100;i++){
+    const y=uni(.04,.91), a=rng()*TAU, r=(1-y)*.88;
+    const cx=r*Math.cos(a), cz=r*Math.sin(a);
+    const size=uni(.025,.047)*(1-y*.4);
+    const mat=(i%3)?1:2;
+    for(let j=0;j<115;j++){
+      const ny=1-2*(j+.5)/115, aa=j*2.39996, nr=Math.sqrt(1-ny*ny);
+      const nx=nr*Math.cos(aa), nz=nr*Math.sin(aa);
+      add(cx+size*nx,y+size*ny*.56,cz+size*nz,'@',mat,[nx,ny,nz]);
+    }
+    add(cx,y+size*.62,cz,'=',2,[0,0,1]);
+  }
+  for(let j=0;j<230;j++){
+    const y=.04+j/250, a=y*TAU*6.5, r=(1-y)*.94;
+    add(r*Math.cos(a),y,r*Math.sin(a),(j%3)?'.':'*',3,[0,0,1]);
+  }
+  const verts=[];
+  for(let i=0;i<10;i++){
+    const a=Math.PI/2+i*Math.PI/5, r=(i%2===0)?.085:.035;
+    verts.push([Math.cos(a)*r,1.07+Math.sin(a)*r*.57]);
+  }
+  for(let k=0;k<10;k++){
+    const [ax,ay]=verts[k],[bx,by]=verts[(k+1)%10];
+    for(let j=0;j<180;j++){
+      let u=rng(),v=rng();
+      if(u+v>1){u=1-u;v=1-v}
+      const xx=ax*u+bx*v, yy=1.07+(ay-1.07)*u+(by-1.07)*v;
+      add(xx,yy,.012,'*',2,[0,.3,1]);
+      add(xx,yy,-.012,'*',2,[0,.3,-1]);
+    }
+  }
+  for(let i=0;i<13;i++){
+    const a=i*2.399, r=.45+(i%3)*.21;
+    const cx=Math.cos(a)*r, cz=Math.sin(a)*r;
+    const sx=uni(.15,.25), sz=uni(.13,.22), sy=uni(.07,.14);
+    const dims=[sx,sy,sz];
+    for(let axis=0;axis<3;axis++){
+      for(const side of [-1,1]){
+        for(let j=0;j<360;j++){
+          const u=uni(-1,1), v=uni(-1,1);
+          const pos=[0,0,0], norm=[0,0,0];
+          const ids=[0,1,2].filter(q=>q!==axis);
+          pos[axis]=dims[axis]*side; norm[axis]=side;
+          pos[ids[0]]=u*dims[ids[0]]; pos[ids[1]]=v*dims[ids[1]];
+          const ribbon=Math.abs(u)<.13||(axis===1&&Math.abs(v)<.13);
+          add(cx+pos[0],-.13+pos[1]*.5,cz+pos[2],ribbon?'#':'%',ribbon?2:((i%3)?1:4),norm);
+        }
+      }
+    }
+  }
+  const n=X.length;
+  return {n,x:Float32Array.from(X),y:Float32Array.from(Y),z:Float32Array.from(Z),
+          ch:Uint8Array.from(C),mat:Uint8Array.from(M),
+          nx:Float32Array.from(NX),ny:Float32Array.from(NY),nz:Float32Array.from(NZ)};
+}
+
+/* ---------- 글리프 캐시 ---------- */
+function makeGlyphCache(size){
+  const cache=new Map();
+  return function(ch,r,g,b){
+    r=Math.min(255,Math.max(0,r|0))>>4<<4; g=Math.min(255,Math.max(0,g|0))>>4<<4; b=Math.min(255,Math.max(0,b|0))>>4<<4;
+    const key=ch+'|'+r+','+g+','+b;
+    let s=cache.get(key);
+    if(!s){
+      s=document.createElement('canvas');s.width=Math.ceil(size*.8)+4;s.height=size+6;
+      const x=s.getContext('2d');
+      x.font=size+'px '+FONT_MONO;x.textBaseline='top';x.fillStyle='rgb('+r+','+g+','+b+')';
+      x.fillText(ch,1,1);
+      cache.set(key,s);
+    }
+    return s;
+  };
+}
+const glyph=makeGlyphCache(12);
+const msgGlyph=makeGlyphCache(8);
+
+/* ---------- 작품 ---------- */
+const canvas=document.getElementById('c');
+const ctx=canvas.getContext('2d');
+function mk(w,h){const c=document.createElement('canvas');c.width=w;c.height=h;return c}
+const letters=mk(W,H), lctx=letters.getContext('2d');
+const msgLayer=mk(W,H), mctx=msgLayer.getContext('2d');
+const glowS=mk(W/6|0,H/6|0), gsctx=glowS.getContext('2d');
+const glowM=mk(W/5|0,H/5|0), gmctx=glowM.getContext('2d');
+for(const c of [gsctx,gmctx]) c.imageSmoothingQuality='high';
+
+const P=build();
+const RGB=[[50,156,104],[245,43,57],[255,197,94],[255,231,173],[147,27,46]];
+const rs=mulberry32(25);
+const scatter=new Float32Array(P.n*3);
+for(let i=0;i<scatter.length;i++)scatter[i]=rs()*2-1;
+const snow=[];
+for(let i=0;i<300;i++){snow.push([rs(),rs(),rs(),rs(),rs(),rs()])}
+
+const COLS=150,ROWS=74;
+const cellZ=new Float32Array(COLS*ROWS), cellId=new Int32Array(COLS*ROWS);
+const RAMP='.,:;ivxXW#@';
+
+let message={points:[],w:0,h:0,left:0,top:0};
+function setMessage(text){
+  text=(text||'').trim();
+  message={points:[],w:0,h:0,left:0,top:0};
+  if(!text)return;
+  const fc=mk(10,10).getContext('2d');
+  const fontStr='bold 76px '+FONT_MSG;
+  fc.font=fontStr;
+  const lineH=Math.round(76*1.25);
+  const lines=[];
+  for(const para of text.split(/\r?\n/)){
+    let line='';
+    for(const chr of para){
+      if(fc.measureText(line+chr).width>780&&line){lines.push(line.replace(/\s+$/,''));line=chr.replace(/^\s+/,'')}
+      else line+=chr;
+    }
+    lines.push(line);
+  }
+  const mh=Math.max(1,lines.length)*lineH;
+  const mc=mk(800,mh), x=mc.getContext('2d');
+  x.fillStyle='#000';x.fillRect(0,0,800,mh);
+  x.font=fontStr;x.fillStyle='#fff';x.textBaseline='top';x.textAlign='center';
+  lines.forEach((l,j)=>x.fillText(l,400,j*lineH+8));
+  let d=x.getImageData(0,0,800,mh).data;
+  let x0=1e9,y0=1e9,x1=-1,y1=-1;
+  for(let yy=0;yy<mh;yy++)for(let xx=0;xx<800;xx++){
+    if(d[(yy*800+xx)*4]>40){if(xx<x0)x0=xx;if(xx>x1)x1=xx;if(yy<y0)y0=yy;if(yy>y1)y1=yy}
+  }
+  if(x1<0)return;
+  let cw=x1-x0+1,chh=y1-y0+1;
+  let tw=cw,th=chh;
+  if(th>190){const s=190/th;tw=Math.max(1,Math.floor(cw*s));th=190}
+  const cc=mk(tw,th), cx=cc.getContext('2d');
+  cx.imageSmoothingQuality='high';
+  cx.drawImage(mc,x0,y0,cw,chh,0,0,tw,th);
+  d=cx.getImageData(0,0,tw,th).data;
+  message.w=tw;message.h=th;message.left=(W-tw)>>1;message.top=(H-th)>>1;
+  for(let xx=0;xx<tw;xx+=4)for(let yy=0;yy<th;yy+=6){
+    const v=d[(yy*tw+xx)*4];
+    if(v>65)message.points.push([xx,yy,v/255]);
+  }
+}
+
+function drawMessage(out,t){
+  const M=message;
+  if(!M.points.length)return;
+  const elapsed=t-GROW-.5;
+  if(elapsed<0)return;
+  const duration=MESSAGE_SECONDS;
+  const phase=elapsed%(duration+12);
+  const alpha=phase<duration+8?Math.min(1,phase/.6):Math.max(0,1-(phase-duration-8)/2);
+  if(alpha<=0)return;
+  const cursor=Math.min(1,phase/duration)*(M.w+24);
+  const bh=M.h+90, btop=M.top-45;
+  for(let y=0;y<bh;y++){
+    const dist=Math.abs(y-bh/2)/(bh/2);
+    const a=178*alpha*(1-dist**3)/255;
+    out.fillStyle='rgba(3,8,15,'+a.toFixed(3)+')';
+    out.fillRect(0,btop+y,W,1);
+  }
+  mctx.fillStyle='#000';mctx.fillRect(0,0,W,H);
+  for(const [x,y,intensity] of M.points){
+    if(x>cursor)continue;
+    const age=(cursor-x)/Math.max(1,M.w/duration);
+    const settle=Math.min(1,age/.3);
+    const pulse=Math.max(0,1-age/.4);
+    const shade=alpha*(.7+.3*intensity);
+    const r=Math.min(255,(234+21*pulse)*shade), g=Math.min(255,(185+70*pulse)*shade), b=Math.min(255,(100+155*pulse)*shade);
+    const chr=pulse>.5?'+':(((x+y)%3)?'#':'*');
+    const px=M.left+x-(1-settle)*14;
+    const py=M.top+y+Math.sin(x*2+y)*8*(1-settle);
+    mctx.drawImage(msgGlyph(chr,r,g,b),px,py);
+  }
+  if(phase<duration){
+    const xx=M.left+cursor;
+    for(let j=0;j<12;j++){
+      const yy=M.top+M.h*(.5+.5*Math.sin(j*2.4+t*2));
+      mctx.drawImage(glyph((j%3===0)?'+':'.',255,220,155),xx+Math.sin(j+t*5)*10,yy);
+    }
+  }
+  gmctx.clearRect(0,0,glowM.width,glowM.height);
+  gmctx.drawImage(msgLayer,0,0,glowM.width,glowM.height);
+  out.save();
+  out.globalCompositeOperation='lighter';
+  out.imageSmoothingEnabled=true;
+  out.drawImage(glowM,0,0,W,H);
+  out.drawImage(msgLayer,0,0);
+  out.restore();
+}
+
+function render(t){
+  const grow=GROW;
+  lctx.fillStyle='#000';lctx.fillRect(0,0,W,H);
+  /* 눈 */
+  for(const [a,b,c,d,e,f] of snow){
+    const depth=.2+.8*c;
+    let x=(a*W+Math.sin(t*.24+d*6)*15*depth+t*2*depth)%W; if(x<0)x+=W;
+    let y=(b*H+t*(7+19*depth))%H; if(y<0)y+=H;
+    const tw=Math.pow(.5+.5*Math.sin(t*(.8+e*1.5)+f*TAU),7);
+    const br=35+100*depth+100*tw;
+    const ch=(tw>.65&&depth>.65)?'*':(depth>.75?'+':'.');
+    lctx.drawImage(glyph(ch,br*.81,br*.89,br),x,y);
+    if(tw>.9&&depth>.8){
+      const dm=Math.floor(br*.22);
+      lctx.strokeStyle='rgb('+dm+','+dm+','+dm+')';lctx.lineWidth=1;
+      lctx.beginPath();lctx.moveTo(x-4,y+6.5);lctx.lineTo(x+10,y+6.5);lctx.moveTo(x+3.5,y-2);lctx.lineTo(x+3.5,y+14);lctx.stroke();
+    }
+  }
+  /* 트리 */
+  const angle=t*TAU/PERIOD, ca=Math.cos(angle), sa=Math.sin(angle);
+  cellZ.fill(-Infinity);cellId.fill(-1);
+  const {n,x:PX,y:PY,z:PZ}=P;
+  const gk=grow/1.40;
+  for(let i=0;i<n;i++){
+    const py=PY[i];
+    const age=t-(py+.23)*gk;
+    if(age<=-.7)continue;
+    let flight=-age/.7; flight=flight<0?0:(flight>1?1:flight);
+    const k=i*3;
+    const X=PX[i]+scatter[k]*flight*.55, Y=py+scatter[k+1]*flight*.16, Z=PZ[i]+scatter[k+2]*flight*.55;
+    const x=X*ca+Z*sa, z=-X*sa+Z*ca;
+    const cx=Math.trunc(COLS/2+x*54), cy=Math.trunc(ROWS*.79-Y*ROWS*.66+z*ROWS*.05);
+    if(cx<0||cx>=COLS||cy<0||cy>=ROWS)continue;
+    const cell=cy*COLS+cx;
+    if(z>cellZ[cell]){cellZ[cell]=z;cellId[cell]=i}
+  }
+  const edgeOn=t<grow+1;
+  for(let cell=0;cell<cellId.length;cell++){
+    const i=cellId[cell]; if(i<0)continue;
+    const cx=cell%COLS, cy=(cell/COLS)|0;
+    const age=t-(PY[i]+.23)*gk;
+    const nx=P.nx[i]*ca+P.nz[i]*sa, nz=-P.nx[i]*sa+P.nz[i]*ca, ny=P.ny[i];
+    const diffuse=Math.max(0,-nx*.4+ny*.5+nz*.76);
+    const rim=Math.pow(Math.max(0,nx*.7-nz*.5),3);
+    const lum=.35+.64*diffuse+.25*rim;
+    const spec=Math.pow(Math.max(0,-nx*.25+ny*.36+nz*.9),24);
+    const mat=P.mat[i], base=RGB[mat];
+    let r,g,b;
+    if(mat===3){
+      const f=.72+.28*Math.sin(t*2+PY[i]*78);
+      r=base[0]*f;g=base[1]*f;b=base[2]*f;
+    }else{
+      const sp=mat!==0?spec*120:0;
+      r=base[0]*lum+sp;g=base[1]*lum+sp;b=base[2]*lum+sp;
+    }
+    let fade=(age+.7)/.7; fade=fade<0?0:(fade>1?1:fade);
+    r*=fade;g*=fade;b*=fade;
+    const edge=edgeOn?Math.exp(-Math.pow((age-.08)/.18,2)):0;
+    r+=edge*145;g+=edge*124;b+=edge*85;
+    let ch;
+    if(mat===3)ch='*';
+    else{let q=(lum*9)|0;q=q<0?0:(q>10?10:q);ch=RAMP[q]}
+    if(edge>.7)ch='+';
+    lctx.drawImage(glyph(ch,r,g,b),cx*6,cy*12+45);
+  }
+  /* 바닥 점 */
+  const fl=glyph('.',33,45,56);
+  for(let q=0;q<200;q++){
+    const a=q*2.399, r=Math.sqrt((q+.5)/200);
+    lctx.drawImage(fl,W/2+Math.cos(a)*r*345,855+Math.sin(a)*r*48);
+  }
+  /* 발광 + 합성 */
+  ctx.fillStyle=BG;ctx.fillRect(0,0,W,H);
+  gsctx.clearRect(0,0,glowS.width,glowS.height);
+  gsctx.drawImage(letters,0,0,glowS.width,glowS.height);
+  ctx.save();
+  ctx.globalCompositeOperation='lighter';
+  ctx.imageSmoothingEnabled=true;ctx.imageSmoothingQuality='high';
+  ctx.globalAlpha=125/255;ctx.drawImage(glowS,0,0,W,H);
+  ctx.globalAlpha=1;ctx.drawImage(letters,0,0);
+  ctx.restore();
+  ctx.font='14px '+FONT_MONO;ctx.textBaseline='top';ctx.fillStyle='rgb(180,166,136)';
+  const label='N O E L   /   A S C I I   I N   M O T I O N';
+  ctx.fillText(label,(W-ctx.measureText(label).width)/2,20);
+  drawMessage(ctx,t);
+}
+
+/* ---------- 컨트롤 ---------- */
+const $=id=>document.getElementById(id);
+const audio=$('music');
+let elapsed=0,paused=false,last=performance.now(),muted=false,musicReady=false,musicStarted=false;
+
+const params=new URLSearchParams(location.search);
+const initial=params.has('message')?params.get('message'):DEFAULT_MESSAGE;
+$('msg').value=initial;
+setMessage(initial);
+
+/* ---------- 음악: 3가지 소스 ----------
+   jingle : 16비트 징글벨 (공개 도메인 곡을 브라우저에서 직접 합성 — 오프라인, 광고·저작권 문제 없음) [기본]
+   yt     : Mariah Carey - All I Want For Christmas Is You (공식 YouTube, MariahCareyVEVO — 광고가 나올 수 있음)
+   local  : 사용자가 고른 MP3 */
+let mode='jingle',wantPlay=false;
+
+/* --- 16비트 징글벨 (SNES풍: 벨/플루트 멜로디 + 패드 + 아르페지오 + 펀치 베이스 + 드럼 + 리버브, 공개 도메인 곡) --- */
+const Jingle=(()=>{
+  const F={C:523.25,D:587.33,E:659.25,F:698.46,G:783.99};
+  const ROOT={C:65.41,F:87.31,G:98.0}, FIFTH={C:98.0,F:130.81,G:146.83};
+  const CHORD={C:[261.63,329.63,392.0],F:[261.63,349.23,440.0],G:[246.94,293.66,392.0]};
+  const E1=[['E',1],['E',1],['E',2],['E',1],['E',1],['E',2],['E',1],['G',1],['C',1.5],['D',.5],['E',4]];
+  const E2=[['F',1],['F',1],['F',1.5],['F',.5],['F',1],['E',1],['E',1],['E',.5],['E',.5],['E',1],['D',1],['D',1],['E',1],['D',2],['G',2]];
+  const E4=[['F',1],['F',1],['F',1],['F',1],['F',1],['E',1],['E',1],['E',.5],['E',.5],['G',1],['G',1],['F',1],['D',1],['C',4]];
+  const SONG=[...E1,...E2,...E1,...E4];
+  const BARS='CCCCFCGGCCCCFCGC'.split('');   // 마디별 코드 (16마디 = 64박)
+  const LOOP=64, BEAT=60/148;
+  const EV=[];
+  let b=0;
+  for(const [n,len] of SONG){EV.push({b,k:'lead',f:F[n],len});b+=len}
+  for(let bar=0;bar<16;bar++)EV.push({b:bar*4,k:'pad',ch:BARS[bar],len:4});
+  for(let beat=0;beat<LOOP;beat++){
+    const ch=BARS[beat>>2];
+    EV.push({b:beat,k:'bass',f:(beat%2===0)?ROOT[ch]:FIFTH[ch],len:.85});
+    EV.push({b:beat,k:(beat%4===0||beat%4===2)?'kick':'snare'});
+    EV.push({b:beat,k:'hat'});EV.push({b:beat+.5,k:'hat'});
+    EV.push({b:beat+.5,k:'sleigh'});
+    // 8분음표 아르페지오 (코드톤 한 옥타브 위)
+    for(let h=0;h<2;h++){
+      const bt=beat+h*.5, step=(beat*2+h)%4, tones=CHORD[ch];
+      EV.push({b:bt,k:'arp',f:tones[[0,1,2,1][step]]*2,len:.45,pan:(step%2?.4:-.4)});
+    }
+  }
+  EV.sort((x,y)=>x.b-y.b);
+
+  let ac=null,master=null,wet=null,noiseBuf=null,timer=null,idx=0,base=0;
+  function ensure(){
+    if(ac)return;
+    ac=new (window.AudioContext||window.webkitAudioContext)();
+    master=ac.createGain();master.gain.value=.32;master.connect(ac.destination);
+    // 리버브: 감쇠하는 스테레오 노이즈 임펄스
+    const sr=ac.sampleRate,len=sr*1.8|0,imp=ac.createBuffer(2,len,sr);
+    for(let c=0;c<2;c++){const d=imp.getChannelData(c);for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.6)}
+    const conv=ac.createConvolver();conv.buffer=imp;
+    wet=ac.createGain();wet.gain.value=.55;wet.connect(conv);
+    const wetOut=ac.createGain();wetOut.gain.value=.5;conv.connect(wetOut);wetOut.connect(master);
+    noiseBuf=ac.createBuffer(1,sr,sr);
+    const nd=noiseBuf.getChannelData(0);for(let i=0;i<sr;i++)nd[i]=Math.random()*2-1;
+  }
+  // 소리를 (건조음 + 리버브 보내기) 로 연결
+  function out(node,pan,send){
+    let n=node;
+    if(pan){const p=ac.createStereoPanner();p.pan.value=pan;n.connect(p);n=p}
+    n.connect(master);
+    if(send){const s=ac.createGain();s.gain.value=send;n.connect(s);s.connect(wet)}
+  }
+  function env(g,t,a,peak,d,sus,len){
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(peak,t+a);
+    g.gain.exponentialRampToValueAtTime(Math.max(.0005,peak*sus),t+a+d);
+    g.gain.setTargetAtTime(0,t+Math.max(a+d,len*.85),.06);
+  }
+  function lead(f,t,len){
+    const g=ac.createGain();env(g,t,.012,.3,.18,.55,len);
+    const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=4200;
+    const dur=len+.35,stop=t+dur;
+    for(const [type,mult,vol] of [['triangle',1,1],['sine',2,.35],['sawtooth',1,.12]]){
+      const o=ac.createOscillator(),v=ac.createGain();
+      o.type=type;o.frequency.value=f*mult;v.gain.value=vol;
+      if(len>=1.4*BEAT&&mult===1){ // 긴 음에는 비브라토
+        const l=ac.createOscillator(),lg=ac.createGain();
+        l.frequency.value=5.6;lg.gain.setValueAtTime(0,t);lg.gain.linearRampToValueAtTime(f*.006,t+.35);
+        l.connect(lg);lg.connect(o.frequency);l.start(t);l.stop(stop);
+      }
+      o.connect(v);v.connect(g);o.start(t);o.stop(stop);
+    }
+    g.connect(lp);out(lp,0,.35);
+  }
+  function pad(ch,t,len){
+    const g=ac.createGain();
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.055,t+.5);
+    g.gain.setValueAtTime(.055,t+len-.5);g.gain.linearRampToValueAtTime(0,t+len);
+    const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=1100;
+    for(const f of CHORD[ch])for(const det of [-7,7]){
+      const o=ac.createOscillator();o.type='sawtooth';o.frequency.value=f;o.detune.value=det;
+      o.connect(g);o.start(t);o.stop(t+len+.05);
+    }
+    g.connect(lp);out(lp,0,.5);
+  }
+  function arp(f,t,len,pan){
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.type='sine';o.frequency.value=f;
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.06,t+.008);g.gain.exponentialRampToValueAtTime(.001,t+len);
+    o.connect(g);o.start(t);o.stop(t+len+.02);out(g,pan,.4);
+  }
+  function bass(f,t,len){
+    const o=ac.createOscillator(),g=ac.createGain(),lp=ac.createBiquadFilter();
+    o.type='sawtooth';o.frequency.value=f;
+    lp.type='lowpass';lp.frequency.setValueAtTime(900,t);lp.frequency.exponentialRampToValueAtTime(220,t+len*.7);
+    g.gain.setValueAtTime(.38,t);g.gain.setTargetAtTime(0,t+len*.7,.05);
+    o.connect(lp);lp.connect(g);o.start(t);o.stop(t+len+.2);out(g,0,0);
+  }
+  function noise(t,len,vol,type,freq,q,pan,send){
+    const s=ac.createBufferSource();s.buffer=noiseBuf;
+    const f=ac.createBiquadFilter();f.type=type;f.frequency.value=freq;f.Q.value=q||1;
+    const g=ac.createGain();g.gain.setValueAtTime(vol,t);g.gain.exponentialRampToValueAtTime(.001,t+len);
+    s.connect(f);f.connect(g);s.start(t,Math.random()*.5);s.stop(t+len+.02);out(g,pan,send||0);
+  }
+  function kick(t){
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.type='sine';o.frequency.setValueAtTime(170,t);o.frequency.exponentialRampToValueAtTime(42,t+.16);
+    g.gain.setValueAtTime(.8,t);g.gain.exponentialRampToValueAtTime(.001,t+.22);
+    o.connect(g);o.start(t);o.stop(t+.25);out(g,0,0);
+  }
+  function snare(t){
+    noise(t,.16,.3,'bandpass',2400,.8,0,.5);
+    const o=ac.createOscillator(),g=ac.createGain();
+    o.type='triangle';o.frequency.setValueAtTime(220,t);o.frequency.exponentialRampToValueAtTime(140,t+.08);
+    g.gain.setValueAtTime(.25,t);g.gain.exponentialRampToValueAtTime(.001,t+.1);
+    o.connect(g);o.start(t);o.stop(t+.12);out(g,0,.3);
+  }
+  function sleigh(t){
+    noise(t,.12,.14,'bandpass',7200,3,.3,.5);
+    for(const f of [3520,4698]){
+      const o=ac.createOscillator(),g=ac.createGain();
+      o.type='sine';o.frequency.value=f;
+      g.gain.setValueAtTime(.03,t);g.gain.exponentialRampToValueAtTime(.001,t+.18);
+      o.connect(g);o.start(t);o.stop(t+.2);out(g,.3,.5);
+    }
+  }
+  function fire(e,t){
+    const L=(e.len||0)*BEAT;
+    switch(e.k){
+      case 'lead':lead(e.f,t,Math.max(.1,L*.95));break;
+      case 'pad':pad(e.ch,t,L);break;
+      case 'arp':arp(e.f,t,L,e.pan);break;
+      case 'bass':bass(e.f,t,L);break;
+      case 'kick':kick(t);break;
+      case 'snare':snare(t);break;
+      case 'hat':noise(t,.04,.06,'highpass',8500,1,-.2,0);break;
+      case 'sleigh':sleigh(t);break;
+    }
+  }
+  function pump(){
+    while(true){
+      const e=EV[idx],t=base+e.b*BEAT;
+      if(t>ac.currentTime+.5)break;
+      fire(e,Math.max(t,ac.currentTime));
+      idx++;
+      if(idx>=EV.length){idx=0;base+=LOOP*BEAT}
+    }
+  }
+  return {
+    play(){ensure();ac.resume();if(timer)return;if(base<ac.currentTime){base=ac.currentTime+.05;idx=0}timer=setInterval(pump,80);pump()},
+    pause(){if(timer){clearInterval(timer);timer=null}if(ac)ac.suspend()},
+    restart(){idx=0;if(ac)base=ac.currentTime+.1}
+  };
+})();
+
+/* --- YouTube (선택 시에만 로드) --- */
+const YT_ID='yXQViqx6GMY';
+let yt=null,ytReady=false,ytLoading=false;
+function loadYT(){
+  if(ytLoading)return;ytLoading=true;
+  window.onYouTubeIframeAPIReady=()=>{
+    yt=new YT.Player('yt',{width:200,height:200,videoId:YT_ID,
+      playerVars:{playsinline:1,controls:0,disablekb:1,rel:0,loop:1,playlist:YT_ID,origin:location.protocol.startsWith('http')?location.origin:undefined},
+      events:{onReady:()=>{ytReady=true;if(wantPlay&&mode==='yt'&&!muted&&!paused)yt.playVideo()},
+              onStateChange:e=>{if(e.data===YT.PlayerState.ENDED)yt.playVideo()}}});
+  };
+  const s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';s.async=true;document.head.appendChild(s);
+}
+
+function startMusic(){
+  if(muted||paused)return;
+  wantPlay=true;
+  if(mode==='jingle')Jingle.play();
+  else if(mode==='local')audio.play().catch(()=>{});
+  else if(mode==='yt'){if(ytReady)yt.playVideo();else loadYT()}
+}
+function stopMusic(){
+  Jingle.pause();audio.pause();if(ytReady)yt.pauseVideo();
+}
+function setMode(m){
+  stopMusic();mode=m;$('src').value=m;
+  if(m==='yt'&&!ytReady)loadYT();
+  if(wantPlay)startMusic();
+}
+$('src').onchange=e=>{
+  if(e.target.value==='local'){$('src').value=mode;$('file').click()}
+  else setMode(e.target.value);
+};
+// 모바일(iOS·인앱 브라우저)은 touchend/click 만 오디오 잠금 해제로 인정하므로 모두 듣는다. startMusic 은 여러 번 불려도 안전하다.
+const tryPlay=()=>{if(!muted&&!paused){startMusic();$('tap').classList.add('gone')}};
+
+for(const ev of ['pointerdown','touchend','click'])addEventListener(ev,tryPlay,{passive:true});
+addEventListener('keydown',e=>{if(e.target.tagName!=='INPUT')tryPlay()});
+
+function setPaused(p){
+  paused=p;$('pause').textContent=p?'재생':'일시정지';
+  if(p)stopMusic();else if(wantPlay)startMusic();
+}
+function restart(){
+  elapsed=0;
+  try{Jingle.restart();if(mode==='local')audio.currentTime=0;else if(mode==='yt'&&ytReady)yt.seekTo(0,true)}catch(e){}
+}
+$('pause').onclick=()=>setPaused(!paused);
+$('restart').onclick=restart;
+$('mute').onclick=()=>{
+  muted=!muted;$('mute').textContent=muted?'🔇 음악':'🔊 음악';
+  if(muted)stopMusic();else startMusic();
+};
+$('file').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  audio.src=URL.createObjectURL(f);muted=false;$('mute').textContent='🔊 음악';wantPlay=true;
+  setMode('local');
+};
+
+function applyMsg(){setMessage($('msg').value);restart()}
+$('msg').addEventListener('keydown',e=>{e.stopPropagation();if(e.key==='Enter'){applyMsg();e.target.blur()}});
+$('msg').addEventListener('change',applyMsg);
+addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT')return;
+  if(e.code==='Space'){e.preventDefault();setPaused(!paused)}
+  else if(e.key==='r'||e.key==='R')restart();
+});
+
+function frame(now){
+  const dt=Math.min(.1,(now-last)/1000);last=now;
+  if(!paused)elapsed+=dt;
+  render(elapsed);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
