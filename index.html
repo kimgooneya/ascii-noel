@@ -16,13 +16,12 @@
   #tap.gone{display:none}
   @keyframes pulse{50%{opacity:.45}}
   #bar{flex:0 0 auto;display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:#080d16;border-top:1px solid #1b2433}
-  #bar input[type=text],#bar button,#bar select,#bar label.btn{min-height:40px;background:#0b121d;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font:inherit;font-size:14px}
+  #bar input[type=text],#bar button,#bar select{min-height:40px;background:#0b121d;color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font:inherit;font-size:14px}
   #bar input[type=text]{flex:1 1 100%;max-width:420px;font-size:16px} /* 16px: iOS 입력 시 자동 확대 방지 */
-  #bar button,#bar label.btn,#bar select{cursor:pointer;white-space:nowrap}
-  #bar button:hover,#bar label.btn:hover{border-color:var(--dim)}
-  #bar input[type=file]{display:none}
-  #hint{opacity:.6;white-space:nowrap}
-  @media (max-width:720px){#hint,#bar label.btn{display:none}#bar select{flex:1 1 100%;max-width:420px;text-overflow:ellipsis}#bar button{flex:1 1 0}}
+  #bar button,#bar select{cursor:pointer;white-space:nowrap}
+  #bar button:hover{border-color:var(--dim)}
+    #hint{opacity:.6;white-space:nowrap}
+  @media (max-width:720px){#hint{display:none}#bar select{flex:1 1 100%;max-width:420px;text-overflow:ellipsis}#bar button{flex:1 1 0}}
   @media (min-width:721px){#bar{flex-wrap:nowrap}#bar input[type=text]{flex:0 1 260px}}
 </style>
 </head>
@@ -33,16 +32,9 @@
   <button id="pause">일시정지</button>
   <button id="restart">처음부터</button>
   <button id="mute">🔊 음악</button>
-  <select id="src" title="배경음악">
-    <option value="jingle">🎹 16비트 징글벨 (기본·광고 없음)</option>
-    <option value="yt">🎤 머라이어 캐리 (YouTube·광고 가능)</option>
-    <option value="local">📁 내 MP3</option>
-  </select>
-  <label class="btn">MP3 선택<input id="file" type="file" accept="audio/*"></label>
+  <select id="src" title="배경음악 (16비트)"></select>
   <span id="hint">Space: 일시정지 · R: 다시 · 화면을 클릭하면 음악 시작</span>
 </div>
-<audio id="music" loop preload="auto"></audio>
-<div style="position:fixed;left:-400px;top:0;width:200px;height:200px;overflow:hidden"><div id="yt"></div></div>
 
 <script>
 "use strict";
@@ -355,83 +347,101 @@ function render(t){
 
 /* ---------- 컨트롤 ---------- */
 const $=id=>document.getElementById(id);
-const audio=$('music');
-let elapsed=0,paused=false,last=performance.now(),muted=false,musicReady=false,musicStarted=false;
+let elapsed=0,paused=false,last=performance.now(),muted=false;
 
 const params=new URLSearchParams(location.search);
 const initial=params.has('message')?params.get('message'):DEFAULT_MESSAGE;
 $('msg').value=initial;
 setMessage(initial);
 
-/* ---------- 음악: 3가지 소스 ----------
-   jingle : 16비트 징글벨 (공개 도메인 곡을 브라우저에서 직접 합성 — 오프라인, 광고·저작권 문제 없음) [기본]
-   yt     : Mariah Carey - All I Want For Christmas Is You (공식 YouTube, MariahCareyVEVO — 광고가 나올 수 있음)
-   local  : 사용자가 고른 MP3 */
-let mode='jingle',wantPlay=false;
+/* ---------- 음악: 16비트(SNES풍) 캐럴 모음 ----------
+   모두 저작권이 만료된 곡(공개 도메인)이며, 브라우저가 직접 합성하므로 파일·인터넷·광고가 없습니다.
+   멜로디 [음, 박수] / 마디별 코드 / 박자 / 못갖춘마디(offset) 로 곡을 정의합니다. */
+let wantPlay=false;
 
-/* --- 16비트 징글벨 (SNES풍: 벨/플루트 멜로디 + 패드 + 아르페지오 + 펀치 베이스 + 드럼 + 리버브, 공개 도메인 곡) --- */
-const Jingle=(()=>{
-  const F={C:523.25,D:587.33,E:659.25,F:698.46,G:783.99};
-  const ROOT={C:65.41,F:87.31,G:98.0}, FIFTH={C:98.0,F:130.81,G:146.83};
-  const CHORD={C:[261.63,329.63,392.0],F:[261.63,349.23,440.0],G:[246.94,293.66,392.0]};
-  const E1=[['E',1],['E',1],['E',2],['E',1],['E',1],['E',2],['E',1],['G',1],['C',1.5],['D',.5],['E',4]];
-  const E2=[['F',1],['F',1],['F',1.5],['F',.5],['F',1],['E',1],['E',1],['E',.5],['E',.5],['E',1],['D',1],['D',1],['E',1],['D',2],['G',2]];
-  const E4=[['F',1],['F',1],['F',1],['F',1],['F',1],['E',1],['E',1],['E',.5],['E',.5],['G',1],['G',1],['F',1],['D',1],['C',4]];
-  const SONG=[...E1,...E2,...E1,...E4];
-  const BARS='CCCCFCGGCCCCFCGC'.split('');   // 마디별 코드 (16마디 = 64박)
-  const LOOP=64, BEAT=60/148;
-  const EV=[];
-  let b=0;
-  for(const [n,len] of SONG){EV.push({b,k:'lead',f:F[n],len});b+=len}
-  for(let bar=0;bar<16;bar++)EV.push({b:bar*4,k:'pad',ch:BARS[bar],len:4});
-  for(let beat=0;beat<LOOP;beat++){
-    const ch=BARS[beat>>2];
-    EV.push({b:beat,k:'bass',f:(beat%2===0)?ROOT[ch]:FIFTH[ch],len:.85});
-    EV.push({b:beat,k:(beat%4===0||beat%4===2)?'kick':'snare'});
-    EV.push({b:beat,k:'hat'});EV.push({b:beat+.5,k:'hat'});
-    EV.push({b:beat+.5,k:'sleigh'});
-    // 8분음표 아르페지오 (코드톤 한 옥타브 위)
-    for(let h=0;h<2;h++){
-      const bt=beat+h*.5, step=(beat*2+h)%4, tones=CHORD[ch];
-      EV.push({b:bt,k:'arp',f:tones[[0,1,2,1][step]]*2,len:.45,pan:(step%2?.4:-.4)});
+const CHORDS={ // t: 패드·아르페지오 화음, r: 베이스 근음, f: 5도
+  C:{t:['C4','E4','G4'],r:'C2',f:'G2'},
+  F:{t:['C4','F4','A4'],r:'F2',f:'C3'},
+  G:{t:['B3','D4','G4'],r:'G2',f:'D3'},
+  D:{t:['A3','D4','F#4'],r:'D2',f:'A2'},
+};
+const SONGS={
+  jingle:{name:'🔔 징글벨',bpm:148,bpb:4,offset:0,
+    lead:[...'E5 1,E5 1,E5 2,E5 1,E5 1,E5 2,E5 1,G5 1,C5 1.5,D5 .5,E5 4'.split(','),
+          ...'F5 1,F5 1,F5 1.5,F5 .5,F5 1,E5 1,E5 1,E5 .5,E5 .5,E5 1,D5 1,D5 1,E5 1,D5 2,G5 2'.split(','),
+          ...'E5 1,E5 1,E5 2,E5 1,E5 1,E5 2,E5 1,G5 1,C5 1.5,D5 .5,E5 4'.split(','),
+          ...'F5 1,F5 1,F5 1,F5 1,F5 1,E5 1,E5 1,E5 .5,E5 .5,G5 1,G5 1,F5 1,D5 1,C5 4'.split(',')],
+    bars:'C C C C F C G G C C C C F C G C'.split(' ')},
+  wish:{name:'🎁 We Wish You a Merry Christmas',bpm:132,bpb:3,offset:1,
+    lead:'D4 1,G4 1,G4 .5,A4 .5,G4 .5,F#4 .5,E4 1,E4 2,A4 1,A4 .5,B4 .5,A4 .5,G4 .5,F#4 1,D4 2,B4 1,B4 .5,C5 .5,B4 .5,A4 .5,G4 1,E4 1,D4 .5,D4 .5,E4 1,A4 1,F#4 1,G4 3'.split(','),
+    bars:'G C D D G C D G'.split(' ')},
+  deck:{name:'🎄 Deck the Halls',bpm:140,bpb:4,offset:0,
+    lead:[...'G5 1.5,F5 .5,E5 1,D5 1,C5 1,D5 1,E5 1,C5 1,D5 .5,E5 .5,F5 .5,D5 .5,E5 1.5,D5 .5,C5 1,B4 1,C5 2'.split(','),
+          ...'G5 1.5,F5 .5,E5 1,D5 1,C5 1,D5 1,E5 1,C5 1,D5 .5,E5 .5,F5 .5,D5 .5,E5 1.5,D5 .5,C5 1,B4 1,C5 2'.split(',')],
+    bars:'C C G C C C G C'.split(' ')},
+  ode:{name:'🎶 환희의 송가 (Ode to Joy)',bpm:128,bpb:4,offset:0,
+    lead:[...'E5 1,E5 1,F5 1,G5 1,G5 1,F5 1,E5 1,D5 1,C5 1,C5 1,D5 1,E5 1,E5 1.5,D5 .5,D5 2'.split(','),
+          ...'E5 1,E5 1,F5 1,G5 1,G5 1,F5 1,E5 1,D5 1,C5 1,C5 1,D5 1,E5 1,D5 1.5,C5 .5,C5 2'.split(','),
+          ...'D5 1,D5 1,E5 1,C5 1,D5 1,E5 .5,F5 .5,E5 1,C5 1,D5 1,E5 .5,F5 .5,E5 1,D5 1,C5 1,D5 1,G4 2'.split(','),
+          ...'E5 1,E5 1,F5 1,G5 1,G5 1,F5 1,E5 1,D5 1,C5 1,C5 1,D5 1,E5 1,D5 1.5,C5 .5,C5 2'.split(',')],
+    bars:'C C C G C C C C G C G C C C C C'.split(' ')},
+};
+
+/* --- 합성기 --- */
+const Synth=(()=>{
+  const SEMI={C:0,D:2,E:4,F:5,G:7,A:9,B:11};
+  const hz=n=>{const m=/^([A-G])(#|b)?(\d)$/.exec(n);return 440*Math.pow(2,((+m[3]+1)*12+SEMI[m[1]]+(m[2]==='#'?1:m[2]==='b'?-1:0)-69)/12)};
+  let ac=null,master=null,wet=null,noiseBuf=null,timer=null,idx=0,base=0,EV=[],loop=0,beat=.4,songId='jingle';
+
+  function compile(id){
+    const s=SONGS[id];beat=60/s.bpm;EV=[];
+    let b=0;
+    for(const item of s.lead){const [n,l]=item.trim().split(' ');EV.push({b,k:'lead',f:hz(n),len:+l});b+=+l}
+    loop=b;
+    const bars=s.bars.length;
+    for(let bar=0;bar<bars;bar++)EV.push({b:s.offset+bar*s.bpb,k:'pad',ch:s.bars[bar],len:s.bpb});
+    for(let t=0;t<b;t++){
+      EV.push({b:t,k:'hat'});EV.push({b:t+.5,k:'hat'});EV.push({b:t+.5,k:'sleigh'});
+      if(t<s.offset)continue;
+      const bar=Math.min(bars-1,Math.floor((t-s.offset)/s.bpb)),i=(t-s.offset)%s.bpb,ch=CHORDS[s.bars[bar]];
+      EV.push({b:t,k:'bass',f:hz(i%2===0?ch.r:ch.f),len:.85});
+      if(i===0||(s.bpb===4&&i===2))EV.push({b:t,k:'kick'});
+      else if(s.bpb===4||i===2)EV.push({b:t,k:'snare'});
+      for(let h=0;h<2;h++){ // 8분음표 아르페지오
+        const step=(t*2+h)%4,pan=step%2?.4:-.4;
+        EV.push({b:t+h*.5,k:'arp',f:hz(ch.t[[0,1,2,1][step]])*2,len:.45,pan});
+      }
     }
+    EV.sort((x,y)=>x.b-y.b);idx=0;
   }
-  EV.sort((x,y)=>x.b-y.b);
-
-  let ac=null,master=null,wet=null,noiseBuf=null,timer=null,idx=0,base=0;
   function ensure(){
     if(ac)return;
     ac=new (window.AudioContext||window.webkitAudioContext)();
     master=ac.createGain();master.gain.value=.32;master.connect(ac.destination);
-    // 리버브: 감쇠하는 스테레오 노이즈 임펄스
     const sr=ac.sampleRate,len=sr*1.8|0,imp=ac.createBuffer(2,len,sr);
     for(let c=0;c<2;c++){const d=imp.getChannelData(c);for(let i=0;i<len;i++)d[i]=(Math.random()*2-1)*Math.pow(1-i/len,2.6)}
     const conv=ac.createConvolver();conv.buffer=imp;
     wet=ac.createGain();wet.gain.value=.55;wet.connect(conv);
-    const wetOut=ac.createGain();wetOut.gain.value=.5;conv.connect(wetOut);wetOut.connect(master);
+    const wo=ac.createGain();wo.gain.value=.5;conv.connect(wo);wo.connect(master);
     noiseBuf=ac.createBuffer(1,sr,sr);
     const nd=noiseBuf.getChannelData(0);for(let i=0;i<sr;i++)nd[i]=Math.random()*2-1;
   }
-  // 소리를 (건조음 + 리버브 보내기) 로 연결
   function out(node,pan,send){
     let n=node;
     if(pan){const p=ac.createStereoPanner();p.pan.value=pan;n.connect(p);n=p}
     n.connect(master);
-    if(send){const s=ac.createGain();s.gain.value=send;n.connect(s);s.connect(wet)}
-  }
-  function env(g,t,a,peak,d,sus,len){
-    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(peak,t+a);
-    g.gain.exponentialRampToValueAtTime(Math.max(.0005,peak*sus),t+a+d);
-    g.gain.setTargetAtTime(0,t+Math.max(a+d,len*.85),.06);
+    if(send){const g=ac.createGain();g.gain.value=send;n.connect(g);g.connect(wet)}
   }
   function lead(f,t,len){
-    const g=ac.createGain();env(g,t,.012,.3,.18,.55,len);
+    const g=ac.createGain();
+    g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.3,t+.012);
+    g.gain.exponentialRampToValueAtTime(.165,t+.19);g.gain.setTargetAtTime(0,t+Math.max(.2,len*.85),.06);
     const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=4200;
-    const dur=len+.35,stop=t+dur;
+    const stop=t+len+.35;
     for(const [type,mult,vol] of [['triangle',1,1],['sine',2,.35],['sawtooth',1,.12]]){
       const o=ac.createOscillator(),v=ac.createGain();
       o.type=type;o.frequency.value=f*mult;v.gain.value=vol;
-      if(len>=1.4*BEAT&&mult===1){ // 긴 음에는 비브라토
+      if(len>=1.4*beat&&mult===1){
         const l=ac.createOscillator(),lg=ac.createGain();
         l.frequency.value=5.6;lg.gain.setValueAtTime(0,t);lg.gain.linearRampToValueAtTime(f*.006,t+.35);
         l.connect(lg);lg.connect(o.frequency);l.start(t);l.stop(stop);
@@ -445,8 +455,8 @@ const Jingle=(()=>{
     g.gain.setValueAtTime(0,t);g.gain.linearRampToValueAtTime(.055,t+.5);
     g.gain.setValueAtTime(.055,t+len-.5);g.gain.linearRampToValueAtTime(0,t+len);
     const lp=ac.createBiquadFilter();lp.type='lowpass';lp.frequency.value=1100;
-    for(const f of CHORD[ch])for(const det of [-7,7]){
-      const o=ac.createOscillator();o.type='sawtooth';o.frequency.value=f;o.detune.value=det;
+    for(const n of CHORDS[ch].t)for(const det of [-7,7]){
+      const o=ac.createOscillator();o.type='sawtooth';o.frequency.value=hz(n);o.detune.value=det;
       o.connect(g);o.start(t);o.stop(t+len+.05);
     }
     g.connect(lp);out(lp,0,.5);
@@ -493,7 +503,7 @@ const Jingle=(()=>{
     }
   }
   function fire(e,t){
-    const L=(e.len||0)*BEAT;
+    const L=(e.len||0)*beat;
     switch(e.k){
       case 'lead':lead(e.f,t,Math.max(.1,L*.95));break;
       case 'pad':pad(e.ch,t,L);break;
@@ -507,56 +517,34 @@ const Jingle=(()=>{
   }
   function pump(){
     while(true){
-      const e=EV[idx],t=base+e.b*BEAT;
+      const e=EV[idx],t=base+e.b*beat;
       if(t>ac.currentTime+.5)break;
       fire(e,Math.max(t,ac.currentTime));
       idx++;
-      if(idx>=EV.length){idx=0;base+=LOOP*BEAT}
+      if(idx>=EV.length){idx=0;base+=loop*beat}
     }
   }
+  compile(songId);
   return {
     play(){ensure();ac.resume();if(timer)return;if(base<ac.currentTime){base=ac.currentTime+.05;idx=0}timer=setInterval(pump,80);pump()},
     pause(){if(timer){clearInterval(timer);timer=null}if(ac)ac.suspend()},
-    restart(){idx=0;if(ac)base=ac.currentTime+.1}
+    restart(){idx=0;if(ac)base=ac.currentTime+.1},
+    // 곡 바꾸기: 이미 예약된 소리는 짧게 끝나므로 새 곡을 바로 이어서 예약한다
+    setSong(id){songId=id;compile(id);if(ac)base=ac.currentTime+.1}
   };
 })();
 
-/* --- YouTube (선택 시에만 로드) --- */
-const YT_ID='yXQViqx6GMY';
-let yt=null,ytReady=false,ytLoading=false;
-function loadYT(){
-  if(ytLoading)return;ytLoading=true;
-  window.onYouTubeIframeAPIReady=()=>{
-    yt=new YT.Player('yt',{width:200,height:200,videoId:YT_ID,
-      playerVars:{playsinline:1,controls:0,disablekb:1,rel:0,loop:1,playlist:YT_ID,origin:location.protocol.startsWith('http')?location.origin:undefined},
-      events:{onReady:()=>{ytReady=true;if(wantPlay&&mode==='yt'&&!muted&&!paused)yt.playVideo()},
-              onStateChange:e=>{if(e.data===YT.PlayerState.ENDED)yt.playVideo()}}});
-  };
-  const s=document.createElement('script');s.src='https://www.youtube.com/iframe_api';s.async=true;document.head.appendChild(s);
-}
+function startMusic(){if(muted||paused)return;wantPlay=true;Synth.play()}
+function stopMusic(){Synth.pause()}
 
-function startMusic(){
-  if(muted||paused)return;
-  wantPlay=true;
-  if(mode==='jingle')Jingle.play();
-  else if(mode==='local')audio.play().catch(()=>{});
-  else if(mode==='yt'){if(ytReady)yt.playVideo();else loadYT()}
+// 곡 선택 드롭다운
+{
+  const sel=$('src');
+  for(const [id,s] of Object.entries(SONGS)){const o=document.createElement('option');o.value=id;o.textContent=s.name;sel.appendChild(o)}
+  sel.onchange=e=>{Synth.setSong(e.target.value);elapsed=0;tryPlay()};
 }
-function stopMusic(){
-  Jingle.pause();audio.pause();if(ytReady)yt.pauseVideo();
-}
-function setMode(m){
-  stopMusic();mode=m;$('src').value=m;
-  if(m==='yt'&&!ytReady)loadYT();
-  if(wantPlay)startMusic();
-}
-$('src').onchange=e=>{
-  if(e.target.value==='local'){$('src').value=mode;$('file').click()}
-  else setMode(e.target.value);
-};
 // 모바일(iOS·인앱 브라우저)은 touchend/click 만 오디오 잠금 해제로 인정하므로 모두 듣는다. startMusic 은 여러 번 불려도 안전하다.
 const tryPlay=()=>{if(!muted&&!paused){startMusic();$('tap').classList.add('gone')}};
-
 for(const ev of ['pointerdown','touchend','click'])addEventListener(ev,tryPlay,{passive:true});
 addEventListener('keydown',e=>{if(e.target.tagName!=='INPUT')tryPlay()});
 
@@ -564,20 +552,12 @@ function setPaused(p){
   paused=p;$('pause').textContent=p?'재생':'일시정지';
   if(p)stopMusic();else if(wantPlay)startMusic();
 }
-function restart(){
-  elapsed=0;
-  try{Jingle.restart();if(mode==='local')audio.currentTime=0;else if(mode==='yt'&&ytReady)yt.seekTo(0,true)}catch(e){}
-}
+function restart(){elapsed=0;Synth.restart()}
 $('pause').onclick=()=>setPaused(!paused);
 $('restart').onclick=restart;
 $('mute').onclick=()=>{
   muted=!muted;$('mute').textContent=muted?'🔇 음악':'🔊 음악';
   if(muted)stopMusic();else startMusic();
-};
-$('file').onchange=e=>{
-  const f=e.target.files[0];if(!f)return;
-  audio.src=URL.createObjectURL(f);muted=false;$('mute').textContent='🔊 음악';wantPlay=true;
-  setMode('local');
 };
 
 function applyMsg(){setMessage($('msg').value);restart()}
